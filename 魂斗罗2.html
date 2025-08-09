@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>魂斗罗·锦绣中州｜大型动作平台射击</title>
+  <style>
+    :root{
+      --bg:#05070c;--glass:rgba(255,255,255,.06);--border:rgba(255,255,255,.18);
+      --text:#e8f1ff;--accent:#71d0ff;--accent2:#8ef0c8;--warn:#ffb86b;--danger:#ff6b6b;
+    }
+    html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,PingFang SC,Helvetica,Arial}
+    #game{display:block;width:100vw;height:100vh;background:#000}
+    .hud{position:fixed;inset:12px 12px auto 12px;display:flex;gap:12px;align-items:center;z-index:10}
+    .panel{backdrop-filter:blur(10px) saturate(110%);background:linear-gradient(180deg,rgba(255,255,255,.10),rgba(255,255,255,.04));border:1px solid var(--border);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:10px 14px}
+    .badge{background:var(--glass);border:1px solid var(--border);padding:6px 10px;border-radius:999px;font-size:12px;letter-spacing:.5px}
+    .rightHUD{position:fixed;top:12px;right:12px;display:flex;gap:12px;z-index:10}
+    .hpbar{min-width:220px;height:14px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;border:1px solid var(--border)}
+    .hpbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));width:100%}
+    .score{font-weight:700;letter-spacing:.6px}
+    .help{position:fixed;left:12px;bottom:12px;max-width:560px}
+    .help kbd{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);padding:2px 6px;border-radius:6px;font-family:ui-monospace,Consolas,Menlo,monospace}
+    .btns{position:fixed;right:12px;bottom:12px;display:none;gap:8px;z-index:10}
+    .btn{background:var(--glass);color:#fff;border:1px solid var(--border);border-radius:12px;padding:10px 12px;font-size:14px;user-select:none}
+    @media (max-width: 900px){.btns{display:flex}.help{max-width:80vw}}
+    .center{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none}
+    .title{font-size:20px;font-weight:800;letter-spacing:.8px;text-shadow:0 6px 28px rgba(0,0,0,.65)}
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud panel">
+    <div class="badge">主角：<strong>廖父</strong></div>
+    <div class="badge">关卡 <span id="stage">1</span></div>
+    <div class="badge score">得分 <span id="score">0</span></div>
+    <div class="badge">武器 <span id="weapon">普通</span></div>
+  </div>
+  <div class="rightHUD panel" style="align-items:center">
+    <div class="hpbar" aria-label="HP"><i id="hp" style="width:100%"></i></div>
+    <div class="badge">按 <kbd>P</kbd> 暂停</div>
+  </div>
+  <div class="help panel">操作：<kbd>A/D</kbd> 移动，<kbd>W</kbd>或<kbd>空格</kbd> 跳跃，<kbd>J</kbd> 射击，<kbd>K</kbd> 翻滚/冲刺，<kbd>L</kbd> 切换武器。手机用右下角按钮。</div>
+  <div class="btns" id="mobile">
+    <div class="btn" data-act="left">◀</div>
+    <div class="btn" data-act="right">▶</div>
+    <div class="btn" data-act="jump">跳</div>
+    <div class="btn" data-act="roll">冲</div>
+    <div class="btn" data-act="shoot">射</div>
+    <div class="btn" data-act="switch">切</div>
+  </div>
+  <div class="center"><div class="title" id="title">魂斗罗·锦绣中州</div></div>
+
+  <script>
+    // ===================== 画布与尺寸 =====================
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const DPR = Math.min(2, window.devicePixelRatio || 1);
+    function resize(){
+      const w = window.innerWidth, h = window.innerHeight;
+      canvas.width = Math.floor(w*DPR); canvas.height = Math.floor(h*DPR);
+      canvas.style.width = w+'px'; canvas.style.height = h+'px';
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+    }
+    addEventListener('resize', resize); resize();
+
+    // ===================== 输入 =====================
+    const keys = new Set();
+    const input = {left:false,right:false,up:false,shoot:false,roll:false,switch:false};
+    addEventListener('keydown',e=>{ if(['ArrowLeft','ArrowRight','ArrowUp',' '].includes(e.key)) e.preventDefault(); keys.add(e.key.toLowerCase()); if(e.key.toLowerCase()==='p') paused=!paused;});
+    addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+    const mroot = document.getElementById('mobile');
+    mroot.addEventListener('touchstart',e=>{const t=e.target.closest('.btn'); if(!t)return; t.dataset.down='1'; e.preventDefault();});
+    mroot.addEventListener('touchend',e=>{const t=e.target.closest('.btn'); if(!t)return; t.dataset.down=''; e.preventDefault();});
+    function syncInput(){
+      input.left  = keys.has('a')||keys.has('arrowleft')||!!qs('[data-act="left"][data-down="1"]');
+      input.right = keys.has('d')||keys.has('arrowright')||!!qs('[data-act="right"][data-down="1"]');
+      input.up    = keys.has('w')||keys.has('arrowup')||keys.has(' ')||!!qs('[data-act="jump"][data-down="1"]');
+      input.shoot = keys.has('j')||!!qs('[data-act="shoot"][data-down="1"]');
+      input.roll  = keys.has('k')||!!qs('[data-act="roll"][data-down="1"]');
+      input.switch= keys.has('l')||!!qs('[data-act="switch"][data-down="1"]');
+    }
+    function qs(s){return document.querySelector(s)}
+
+    // ===================== HUD =====================
+    const HUD={hp:qs('#hp'),score:qs('#score'),stage:qs('#stage'),weapon:qs('#weapon'),setHP(p){this.hp.style.width=Math.max(0,Math.min(100,p))+'%';},setScore(v){this.score.textContent=v},setStage(v){this.stage.textContent=v},setWeapon(w){this.weapon.textContent=w}};
+
+    // ===================== 世界与镜头（伪3D透视） =====================
+    const G={gravity:0.9, floor:()=> canvas.height/DPR*0.86, camX:0};
+    function toScreenX(x){return Math.floor(x - G.camX)}
+
+    // 真实中式背景：程序化——远山、云海、河面、拱桥、飞檐、灯笼、竹林（剪影），并带透视地面
+    function drawChineseBackdrop(t, theme){
+      const W=canvas.width/DPR, H=canvas.height/DPR; ctx.save();
+      // 天空渐变（晨/暮/夜）
+      const sky=ctx.createLinearGradient(0,0,0,H);
+      if(theme===1){sky.addColorStop(0,'#16223a'); sky.addColorStop(1,'#2a476e');}
+      if(theme===2){sky.addColorStop(0,'#2c0e24'); sky.addColorStop(1,'#0f2f4a');}
+      if(theme===3){sky.addColorStop(0,'#041b1f'); sky.addColorStop(1,'#0a3b2f');}
+      ctx.fillStyle=sky; ctx.fillRect(0,0,W,H);
+
+      // 远山与云海（国画式轮廓）
+      function ridge(yBase,amp,sp,alpha){
+        ctx.fillStyle=`rgba(255,255,255,${alpha})`;
+        ctx.beginPath(); ctx.moveTo(0,H);
+        for(let x=0;x<=W;x+=6){const yy=yBase - Math.sin((x+ t*sp)/220)*amp - Math.cos((x*0.7+ t*sp)/300)*(amp*0.6); ctx.lineTo(x,yy);} ctx.lineTo(W,H); ctx.closePath(); ctx.fill();
+      }
+      ridge(H*0.62,22,18,0.05); ridge(H*0.72,34,28,0.07); ridge(H*0.82,48,46,0.10);
+
+      // 河面光带
+      const river=ctx.createLinearGradient(W*0.3,H*0.78,W*0.7,H*0.86);
+      river.addColorStop(0,'rgba(180,220,255,0.10)'); river.addColorStop(0.5,'rgba(255,255,255,0.22)'); river.addColorStop(1,'rgba(180,220,255,0.10)');
+      ctx.fillStyle=river; ctx.beginPath(); ctx.ellipse(W*0.5,H*0.86,W*0.38,H*0.08,0,0,Math.PI*2); ctx.fill();
+
+      // 拱桥剪影
+      ctx.strokeStyle='rgba(255,255,255,.18)'; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.arc(W*0.5,H*0.84,W*0.32,Math.PI,0); ctx.stroke();
+
+      // 城楼/飞檐剪影（跟随镜头产生轻微视差）
+      function pagoda(x,y,scale){
+        const s=scale; ctx.save(); ctx.translate(toScreenX(x)*0.3,y); ctx.fillStyle='rgba(255,255,255,.12)';
+        for(let i=0;i<3;i++){ ctx.beginPath(); ctx.moveTo(-40*s*(1-i*0.15),-i*22*s); ctx.lineTo(40*s*(1-i*0.15),-i*22*s); ctx.lineTo(30*s*(1-i*0.12),-i*22*s-8*s); ctx.lineTo(-30*s*(1-i*0.12),-i*22*s-8*s); ctx.closePath(); ctx.fill(); }
+        ctx.restore();
+      }
+      pagoda(600, H*0.58, 1); pagoda(1300, H*0.6, 1.2);
+
+      // 近景竹林（风摆）
+      for(let i=0;i<16;i++){
+        const bx=(i*180 + (t*0.15)%2000) - (G.camX%2000);
+        const x=((bx%2000)+2000)%2000 - 200; const y=H*0.85;
+        ctx.strokeStyle='rgba(170,220,180,.35)'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x,y); ctx.quadraticCurveTo(x+Math.sin((t+i)*0.05)*12,y-40, x+Math.sin((t+i)*0.05)*20, y-110); ctx.stroke();
+        // 叶片
+        for(let k=0;k<6;k++){ ctx.beginPath(); ctx.moveTo(x+5*Math.cos(k), y-80-k*8); ctx.lineTo(x+25+8*Math.sin(t*0.03+k), y-90-k*8); ctx.stroke(); }
+      }
+
+      // 透视地面网格（伪3D）
+      const gy=G.floor(); ctx.strokeStyle='rgba(255,255,255,.08)';
+      for(let i=0;i<14;i++){ const y=gy + i*i*1.6; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+      for(let i=0;i<16;i++){ const x=i*W/16 - (G.camX% (W/16)); ctx.beginPath(); ctx.moveTo(x,gy); ctx.lineTo(x,H); ctx.stroke(); }
+
+      ctx.restore();
+    }
+
+    // ===================== 实体与战斗系统 =====================
+    class Entity{constructor(x,y){this.x=x;this.y=y;this.vx=0;this.vy=0;this.w=40;this.h=48;this.dead=false;}}
+    function rect(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+
+    // 角色更大比例 + 阴影 + 胸字
+    function drawPixelChar(x,y,scale,color,label){
+      const s=scale; // 较前版本放大 ~1.8x
+      // 软阴影
+      ctx.save(); ctx.fillStyle='rgba(0,0,0,.30)'; ctx.beginPath(); ctx.ellipse(toScreenX(x)+12*s,y+36*s,18*s,6*s,0,0,Math.PI*2); ctx.fill(); ctx.restore();
+      // 盔甲色块
+      ctx.fillStyle=color; ctx.fillRect(toScreenX(x)+6*s,y+10*s,14*s,14*s); // torso
+      ctx.fillRect(toScreenX(x)+2*s,y+12*s,6*s,6*s); // L arm
+      ctx.fillRect(toScreenX(x)+20*s,y+12*s,6*s,6*s); // R arm
+      ctx.fillRect(toScreenX(x)+8*s,y+24*s,5*s,12*s); // L leg
+      ctx.fillRect(toScreenX(x)+16*s,y+24*s,5*s,12*s); // R leg
+      // 头部
+      ctx.fillStyle='#ffd7a8'; ctx.fillRect(toScreenX(x)+9*s,y+3*s,8*s,7*s);
+      // 发带
+      ctx.fillStyle='#ff3a55'; ctx.fillRect(toScreenX(x)+7*s,y+2*s,12*s,2*s);
+      // 武器（更粗）
+      ctx.fillStyle='#4e5c6e'; ctx.fillRect(toScreenX(x)+26*s,y+16*s,12*s,3*s); ctx.fillRect(toScreenX(x)+25*s,y+14*s,3*s,7*s);
+      // 胸字
+      ctx.fillStyle='#0a0a0a'; ctx.font=`${8*s}px system-ui`; ctx.textBaseline='top'; ctx.fillText(label, toScreenX(x)+11*s, y+12*s);
+    }
+    function drawName(name,x,y,color){ctx.save();ctx.font='16px system-ui';ctx.fillStyle=color;ctx.textAlign='center';ctx.shadowColor='rgba(0,0,0,.6)';ctx.shadowBlur=8;ctx.fillText(name,toScreenX(x),y);ctx.restore();}
+
+    class Bullet extends Entity{constructor(x,y,dir,spd=13,isEnemy=false){super(x,y);this.vx=dir*spd;this.vy=0;this.w=10;this.h=3;this.isEnemy=isEnemy;this.life=120;} update(){this.x+=this.vx;this.y+=this.vy; if(--this.life<=0) this.dead=true;} draw(){ctx.save();ctx.fillStyle=this.isEnemy?'#ffb347':'#a9ffe1';ctx.fillRect(toScreenX(this.x),this.y,this.w,this.h);ctx.restore();}}
+
+    class Player extends Entity{
+      constructor(){super(160,G.floor()-70); this.onGround=false; this.facing=1; this.rollCD=0; this.shootCD=0; this.iFrames=0; this.name='廖父'; this.hp=100; this.weapon=0;}
+      update(){
+        const spd=4.2; if(input.left){this.vx=-spd; this.facing=-1;} else if(input.right){this.vx=spd; this.facing=1;} else this.vx*=0.75;
+        if(input.up && this.onGround){this.vy=-14; this.onGround=false;}
+        if(input.roll && this.rollCD<=0){this.vx+=9*this.facing; this.rollCD=50; this.iFrames=22;}
+        if(input.switch){ this.weapon=(this.weapon+1)%3; input.switch=false; updateWeaponHUD(); }
+        if(input.shoot && this.shootCD<=0){ fireWeapon(this); }
+        this.shootCD--; this.rollCD--; if(this.iFrames>0)this.iFrames--;
+        // 物理
+        this.vy+=G.gravity; this.x+=this.vx; this.y+=this.vy; const gy=G.floor(); if(this.y+this.h>gy){this.y=gy-this.h; this.vy=0; this.onGround=true;}
+        // 镜头推进
+        G.camX = Math.max(this.x-260, G.camX);
+      }
+      draw(){ drawPixelChar(this.x-14,this.y-18,1.8, this.iFrames>0?'#9be7ff':'#47c7ff', this.name); drawName(this.name,this.x+this.w/2,this.y-14,'#cfe8ff'); }
+      hurt(dmg=12){ if(this.iFrames>0) return; this.hp-=dmg; HUD.setHP(this.hp); this.iFrames=24; if(this.hp<=0){gameOver();} }
+      heal(v=20){ this.hp=Math.min(100,this.hp+v); HUD.setHP(this.hp); }
+    }
+
+    function updateWeaponHUD(){ HUD.setWeapon(['普通','散射','激光'][player.weapon]); }
+    function fireWeapon(p){
+      const baseX=p.x+(p.facing>0? 36:-6), baseY=p.y+20; const dir=p.facing>0?1:-1;
+      if(p.weapon===0){ bullets.push(new Bullet(baseX,baseY,dir)); p.shootCD=8; }
+      if(p.weapon===1){ bullets.push(new Bullet(baseX,baseY-4,dir)); bullets.push(new Bullet(baseX,baseY,dir)); bullets.push(new Bullet(baseX,baseY+4,dir)); p.shootCD=12; }
+      if(p.weapon===2){ bullets.push(new Bullet(baseX,baseY,dir,18)); p.shootCD=14; }
+    }
+
+    // 敌人类型
+    const ENEMY_COLORS={
+      '刘爆胎':'#ff6b6b', '杨老五':'#ffd166', '王不飞':'#80ed99', '紫雕恶狼':'#a78bfa', '蓝雕恶鹰':'#66d1ff', 'BOSS':'#ff8cf0'
+    };
+    class Enemy extends Entity{
+      constructor(kind,x){super(x,G.floor()-70); this.kind=kind; this.hp={'刘爆胎':3,'杨老五':4,'王不飞':6,'紫雕恶狼':5,'蓝雕恶鹰':4,'BOSS':40}[kind]||3; this.fireCD=50; this.speed={'王不飞':1.0}[kind]|| (1.6+Math.random()*0.6); this.fly = (kind==='蓝雕恶鹰'); if(this.fly){this.y-=120;}
+      }
+      update(){
+        // 行为
+        if(this.fly){ // 鹰：上下盘旋后俯冲
+          const targetY = G.floor()- (100 + Math.sin(Date.now()/350 + this.x)*60);
+          this.y += (targetY-this.y)*0.04; this.x += (this.x>player.x? -this.speed-1.2: -this.speed*0.5);
+          if(Math.random()<0.01) bullets.push(new Bullet(this.x,this.y+10,(player.x>this.x)?1:-1,10,true));
+        }else{
+          if(player.x < this.x) this.vx = -this.speed; else this.vx = -this.speed*0.5; this.x+=this.vx;
+          if(this.kind==='紫雕恶狼' && Math.random()<0.02 && this.onGround){ this.vy=-12; this.onGround=false; }
+          if(this.kind==='王不飞'){ if(this.fireCD--<=0){ this.fireCD=90; bullets.push(new Bullet(this.x,this.y+14,(player.x>this.x)?1:-1,8,true)); }}
+          this.vy+=G.gravity; this.y+=this.vy; const gy=G.floor(); if(this.y+this.h>gy){this.y=gy-this.h; this.vy=0; this.onGround=true;}
+        }
+        if(this.x < G.camX-80) this.dead=true;
+      }
+      draw(){ const color=ENEMY_COLORS[this.kind]||'#ddd'; drawPixelChar(this.x-12,this.y-18,1.6,color,this.kind); drawName(this.kind,this.x+this.w/2,this.y-16,color); }
+      hit(dmg=1){ this.hp-=dmg; if(this.hp<=0){
+          this.dead=true; score+=100; HUD.setScore(score); spawnParticles(this.x+16,this.y+16);
+          if(this.kind==='刘爆胎'){ // 爆裂
+            for(let a=-1;a<=1;a++) bullets.push(new Bullet(this.x,this.y+10,a*1+ (a===0?0.2:0),10,true));
+          }
+        }
+      }
+    }
+
+    // 粒子
+    const particles=[]; function spawnParticles(x,y){ for(let i=0;i<22;i++) particles.push({x,y,vx:(Math.random()*2-1)*3,vy:(Math.random()*2-1)*3,life:44}); }
+    function updateParticles(){ for(const p of particles){p.x+=p.vx; p.y+=p.vy; p.vy+=0.1; p.life--; } for(let i=particles.length-1;i>=0;i--) if(particles[i].life<=0) particles.splice(i,1); }
+    function drawParticles(){ ctx.save(); ctx.fillStyle='rgba(255,255,255,.9)'; for(const p of particles){ ctx.globalAlpha=Math.max(0,p.life/44); ctx.fillRect(toScreenX(p.x),p.y,2,2);} ctx.restore(); }
+
+    // 道具
+    const pickups=[]; class Pickup extends Entity{constructor(type,x,y){super(x,y);this.type=type; this.w=18; this.h=18;} update(){this.x-=1.2; this.y+=Math.sin(Date.now()/180+this.x)*0.6;} draw(){ctx.save();ctx.fillStyle=this.type==='heal'?'#9bffbd':'#ffe38a'; ctx.beginPath(); ctx.arc(toScreenX(this.x),this.y,9,0,Math.PI*2); ctx.fill(); ctx.restore();}}
+
+    // 关卡/刷怪
+    let stage=1, score=0, paused=false, gameEnded=false; const player=new Player(); const enemies=[], bullets=[];
+    let waveTimer=0, wavesCleared=0;
+    function spawnWave(){
+      const pool = stage===1? ['刘爆胎','杨老五','蓝雕恶鹰'] : stage===2? ['王不飞','紫雕恶狼','杨老五','蓝雕恶鹰'] : ['紫雕恶狼','王不飞','刘爆胎','蓝雕恶鹰'];
+      const kind = pool[Math.floor(Math.random()*pool.length)];
+      enemies.push(new Enemy(kind, G.camX + canvas.width/DPR + 80 + Math.random()*200));
+      if(Math.random()<0.25) pickups.push(new Pickup(Math.random()<0.5?'heal':'weapon', G.camX + canvas.width/DPR + 120, G.floor()-120));
+    }
+
+    function advanceStage(){ stage++; HUD.setStage(stage); titleFlash(`第 ${stage} 幕`); }
+    function titleFlash(text){ const el=document.getElementById('title'); el.textContent=text; el.style.opacity=1; el.style.transform='scale(1)'; setTimeout(()=>{el.style.transition='all .8s cubic-bezier(.2,.8,.2,1)'; el.style.opacity=0; el.style.transform='scale(1.06)'; setTimeout(()=>{el.style.transition='none'},900);},20); }
+
+    function update(){ if(paused||gameEnded) return;
+      syncInput(); waveTimer++; if(waveTimer % (stage===1?70:stage===2?60:50)===0){spawnWave(); wavesCleared++;}
+      if(wavesCleared> 14 && stage<3){ wavesCleared=0; advanceStage(); }
+      player.update(); enemies.forEach(e=>e.update()); bullets.forEach(b=>b.update()); pickups.forEach(p=>p.update());
+      // 碰撞
+      for(const b of bullets){ if(b.isEnemy) continue; for(const e of enemies){ if(rect(b,e)){ e.hit(player.weapon===2?2:1); b.dead=true; } }}
+      for(const b of bullets){ if(!b.isEnemy) continue; if(rect(b,player)){ player.hurt(10); b.dead=true; }}
+      for(const e of enemies){ if(rect(e,player)){ player.hurt(16); e.dead=true; spawnParticles(e.x+12,e.y+12);} }
+      for(const p of pickups){ if(rect(p,player)){ if(p.type==='heal') player.heal(22); else { player.weapon=(player.weapon+1)%3; updateWeaponHUD(); } p.dead=true; }}
+      // 清理
+      prune(enemies); prune(bullets); prune(pickups); updateParticles();
+    }
+    function prune(arr){ for(let i=arr.length-1;i>=0;i--) if(arr[i].dead) arr.splice(i,1); }
+
+    function draw(t){ drawChineseBackdrop(t, stage); // 背景
+      // 地面界线
+      ctx.strokeStyle='rgba(255,255,255,.10)'; ctx.beginPath(); ctx.moveTo(0,G.floor()+18); ctx.lineTo(canvas.width/DPR,G.floor()+18); ctx.stroke();
+      // 实体
+      player.draw(); enemies.forEach(e=>e.draw()); bullets.forEach(b=>b.draw()); pickups.forEach(p=>p.draw()); drawParticles();
+      if(paused) overlayText('暂停中 (P 继续)'); if(gameEnded) overlayText('游戏结束 - 刷新页面再战');
+    }
+
+    function overlayText(s){ const W=canvas.width/DPR, H=canvas.height/DPR; ctx.save(); ctx.fillStyle='#fff'; ctx.font='800 28px system-ui'; ctx.textAlign='center'; ctx.shadowColor='rgba(0,0,0,.6)'; ctx.shadowBlur=12; ctx.fillText(s,W/2,H/2); ctx.restore(); }
+
+    function gameOver(){ gameEnded=true; titleFlash('殒落…'); }
+
+    HUD.setHP(100); HUD.setScore(0); HUD.setStage(1); updateWeaponHUD();
+    let last=0; function loop(ts){ const dt=ts-last; last=ts; update(); draw(ts); requestAnimationFrame(loop);} requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
